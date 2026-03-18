@@ -111,7 +111,9 @@ def render_dashboard():
     
     # Expectancy by 15m bucket
     st.subheader("Rolling Expectancy by Time Of Day (15m Bins)")
-    df['time_bucket'] = pd.to_datetime(df['entry_time']).dt.floor('15T').dt.time
+    # Convert entry times to PST before bucketing
+    df_pst_times = pd.to_datetime(df['entry_time']).dt.tz_convert('America/Los_Angeles')
+    df['time_bucket'] = df_pst_times.dt.floor('15T').dt.time
     expectancy_df = df.groupby('time_bucket')['pnl'].mean().reset_index()
     # convert time_bucket to string for plotting
     expectancy_df['time_bucket_str'] = expectancy_df['time_bucket'].apply(lambda x: x.strftime("%H:%M"))
@@ -316,6 +318,7 @@ def render_new_trade():
             import uuid
             session = get_session()
             try:
+                
                 parsed_entry = parse_time(entry_time_input)
                 parsed_exit = parse_time(exit_time_input)
                 # Combine date and time
@@ -374,10 +377,12 @@ def render_trade_viewer():
         op_type = str(row.get('option_type', '')).upper()
         strike = row.get('strike', '')
         try:
+            # We want to display the time that was saved.
+            # Entry_time is stored in UTC, so we convert it to the local display timezone (PST).
             db_time = pd.to_datetime(row['entry_time'])
             if db_time.tzinfo is None:
-                db_time = db_time.tz_localize('UTC')
-            etime = db_time.tz_convert('America/Los_Angeles').strftime('%b %d, %Y %I:%M %p')
+                db_time = pytz.utc.localize(db_time)
+            etime = db_time.astimezone(pytz.timezone("America/Los_Angeles")).strftime('%b %d, %Y %I:%M:%S %p %Z')
         except:
             etime = row['entry_time']
         pnl = row.get('pnl', 0)
@@ -532,14 +537,17 @@ def render_trade_viewer():
         elif days_ago > 5:
             interval = "5m"
             
-        start_date_str = (db_entry - timedelta(days=2)).strftime('%Y-%m-%d')
-        end_date_str = (db_exit + timedelta(days=2)).strftime('%Y-%m-%d')
+        # yf.history with 1m/5m interval is very sensitive. 
+        # We fetch from 1 day before entry to 1 day after exit to ensure the bars are caught.
+        start_date_str = (db_entry - timedelta(days=1)).strftime('%Y-%m-%d')
+        end_date_str = (db_exit + timedelta(days=1)).strftime('%Y-%m-%d')
         
         md = fetch_cached_market_data(selected['ticker'], interval, start=start_date_str, end=end_date_str)
         if not md.empty:
-            # Revert to filtering exactly for the chart domain
-            start_date = db_entry - timedelta(hours=2) if interval in ("1h", "1d") else db_entry - timedelta(hours=1)
-            end_date = db_exit + timedelta(hours=2) if interval in ("1h", "1d") else db_exit + timedelta(hours=1)
+            # Expand the bounding window to ensure we catch enough data even if times are slightly off
+            # For 1m/5m data, we look for data +/- 5 hours around the trade
+            start_date = db_entry - timedelta(hours=5)
+            end_date = db_exit + timedelta(hours=5)
             mask = (md.index >= start_date) & (md.index <= end_date)
             plot_md = md.loc[mask].copy()
             plot_md = plot_md.sort_index()
@@ -581,23 +589,28 @@ def render_trade_viewer():
                 
                 chart_data = []
                 for idx, row in plot_md.iterrows():
+                    # For Lightweight Charts to show PST on the axis, we pass the local (PST) timestamp
+                    local_ts = to_local_time(idx).timestamp()
                     chart_data.append({
-                        "time": int(idx.timestamp()),
+                        "time": int(local_ts),
                         "open": float(row["Open"]),
                         "high": float(row["High"]),
                         "low": float(row["Low"]),
                         "close": float(row["Close"])
                     })
                 
-                vwap_data = [{"time": int(idx.timestamp()), "value": float(val)} for idx, val in plot_md["vwap"].dropna().items()]
-                ema5_data = [{"time": int(idx.timestamp()), "value": float(val)} for idx, val in plot_md["ema5"].dropna().items()]
-                ema14_data = [{"time": int(idx.timestamp()), "value": float(val)} for idx, val in plot_md["ema14"].dropna().items()]
-                ema25_data = [{"time": int(idx.timestamp()), "value": float(val)} for idx, val in plot_md["ema25"].dropna().items()]
+                vwap_data = [{"time": int(to_local_time(idx).timestamp()), "value": float(val)} for idx, val in plot_md["vwap"].dropna().items()]
+                ema5_data = [{"time": int(to_local_time(idx).timestamp()), "value": float(val)} for idx, val in plot_md["ema5"].dropna().items()]
+                ema14_data = [{"time": int(to_local_time(idx).timestamp()), "value": float(val)} for idx, val in plot_md["ema14"].dropna().items()]
+                ema25_data = [{"time": int(to_local_time(idx).timestamp()), "value": float(val)} for idx, val in plot_md["ema25"].dropna().items()]
                 
+                entry_pst_ts = int(to_local_time(db_entry).timestamp())
+                exit_pst_ts = int(to_local_time(db_exit).timestamp())
+
                 # Markers need strictly to be mapped to data domain correctly.
-                # Find closest timestamps in data to avoid chart errors
-                closest_entry = min(chart_data, key=lambda x: abs(x['time'] - int(db_entry.timestamp())))['time']
-                closest_exit = min(chart_data, key=lambda x: abs(x['time'] - int(db_exit.timestamp())))['time']
+                # Find closest timestamps in local PST data to avoid chart errors
+                closest_entry = min(chart_data, key=lambda x: abs(x['time'] - entry_pst_ts))['time']
+                closest_exit = min(chart_data, key=lambda x: abs(x['time'] - exit_pst_ts))['time']
                 
                 entry_ts = closest_entry
                 exit_ts = closest_exit

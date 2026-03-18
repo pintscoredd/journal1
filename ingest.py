@@ -34,6 +34,12 @@ def get_market_data(ticker: str, interval: str = "1m", start=None, end=None) -> 
     yf_ticker = ticker
     
     safe_ticker = yf_ticker.replace("^", "")
+    # Add a 1-day buffer to the start/end search params for yfinance to ensure we catch intraday bars
+    if start:
+        start = (pd.to_datetime(start) - pd.Timedelta(days=1)).strftime('%Y-%m-%d')
+    if end:
+        end = (pd.to_datetime(end) + pd.Timedelta(days=1)).strftime('%Y-%m-%d')
+
     suffix = f"_{start}_{end}" if start and end else ""
     cache_file = os.path.join(CACHE_DIR, f"{safe_ticker}_{interval}{suffix}.parquet")
     
@@ -323,10 +329,12 @@ def parse_robinhood_to_trades(opt_df: pd.DataFrame) -> List[Dict[str, Any]]:
     trades = []
     
     def safe_localize(dt, default_time_str):
-        et = pytz.timezone("America/New_York")
+        # We assume the user's trading hours/intent are in their local timezone (PST)
+        local_tz = pytz.timezone("America/Los_Angeles")
         d = dt.date() if hasattr(dt, "date") else dt
         t = dt.time() if hasattr(dt, "time") and dt.time() != datetime.min.time() else datetime.strptime(default_time_str, "%H:%M").time()
-        return et.localize(datetime.combine(d, t)).astimezone(pytz.UTC)
+        dt_naive = datetime.combine(d, t)
+        return local_tz.localize(dt_naive).astimezone(pytz.UTC)
 
     for key, group in groups.items():
         # Sort chronologically to naturally pair earlier BTOs with earlier STCs
