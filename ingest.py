@@ -346,7 +346,13 @@ def parse_robinhood_to_trades(opt_df: pd.DataFrame) -> List[Dict[str, Any]]:
 
             entry_price = bto["price"]
             exit_price = ex["price"]
-            entry_dt = bto["date"] if bto["date"] else datetime.now()
+            # Fallback for missing dates: use current ET today (safest for SPX 0DTE)
+            if not bto["date"]:
+                et_now = datetime.now(pytz.timezone("America/New_York"))
+                entry_dt = et_now
+            else:
+                entry_dt = bto["date"]
+            
             exit_dt = ex["date"] if ex["date"] else entry_dt
 
             safe_entry_dt = safe_localize(entry_dt, "09:35")

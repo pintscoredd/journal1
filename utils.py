@@ -9,6 +9,12 @@ def to_local_time(dt_utc: datetime) -> datetime:
         dt_utc = pytz.utc.localize(dt_utc)
     return dt_utc.astimezone(pytz.timezone(DEFAULT_TZ))
 
+def get_local_now() -> datetime:
+    return datetime.now(pytz.timezone(DEFAULT_TZ))
+
+def get_local_today() -> datetime.date:
+    return get_local_now().date()
+
 def safely_divide(a, b, default=0.0):
     try:
         if b == 0 or pd.isna(b):

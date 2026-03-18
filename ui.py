@@ -6,6 +6,7 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit.components.v1 as components
+import pytz
 from datetime import datetime, timedelta
 
 from db import get_session, Trade, Secret
@@ -14,6 +15,7 @@ from ingest import get_market_data, import_trades_csv, parse_robinhood_to_trades
 from ai_adapter import AIAdapter
 from montecarlo import simulate_equity_paths, calculate_risk_metrics
 from enrichment import enrich_trade
+from utils import get_local_today, to_local_time
 
 # --- CACHING ---
 @st.cache_data(ttl=3600)
@@ -305,7 +307,7 @@ def render_new_trade():
         exit_price = c2.number_input("Exit Price", value=6.0, step=0.1)
         
         t1, t2, t3 = st.columns(3)
-        trade_date = t1.date_input("Trade Date", value=datetime.today())
+        trade_date = t1.date_input("Trade Date", value=get_local_today())
         entry_time_input = t2.text_input("Entry Time (PST) e.g. 07:15:30", value="07:00:00")
         exit_time_input = t3.text_input("Exit Time (PST) e.g. 07:30:15", value="07:15:00")
         
@@ -323,6 +325,10 @@ def render_new_trade():
                 # Ensure UTC awareness for yfinance lookup
                 entry_dt_utc = pd.to_datetime(entry_dt).tz_localize('America/Los_Angeles').tz_convert('UTC')
                 exit_dt_utc = pd.to_datetime(exit_dt).tz_localize('America/Los_Angeles').tz_convert('UTC')
+                
+                # Future data check
+                if entry_dt_utc > datetime.now(pytz.utc) + timedelta(minutes=5):
+                    st.warning("⚠️ Trade date/time appears to be in the future. yfinance will not have data for this yet.")
                 
                 new_trade = Trade(
                     trade_uuid=str(uuid.uuid4()),
@@ -659,8 +665,11 @@ def render_trade_viewer():
                 """
                 components.html(chart_html, height=400)
             else:
-                st.warning(f"No market data bounded between {start_date.strftime('%Y-%m-%d %H:%M')} and {end_date.strftime('%Y-%m-%d %H:%M')}.")
-                st.info("Tip: Double check if your entry time was during regular market hours!")
+                st.warning(
+                    f"No market data bounded between {to_local_time(start_date).strftime('%Y-%m-%d %H:%M')} "
+                    f"and {to_local_time(end_date).strftime('%Y-%m-%d %H:%M')} (PST)."
+                )
+                st.info("Tip: Double check if your entry time was during regular market hours! If you just saved this trade after 5 PM PST, ensure the date is set to today.")
     except Exception as e:
         st.warning(f"Failed to load replay: {e}")
 
